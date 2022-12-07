@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "pesgen"
+version = "0.0.0"
+description = "Python Every Street Generator"
+authors = ["Kyoungseoun Chung <kyoungseoun.chung@gmail.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+networkx = "^2.8.8"
+numpy = "^1.23.5"
+matplotlib = "^3.6.2"
+shapely = "^1.8.5"
+pyproj = "^3.4.0"
+
+[tool.poetry.dev-dependencies]
+pre-commit = "^2.20.0"
+pytest = "^7.2.0"
+black = "^22.10.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
