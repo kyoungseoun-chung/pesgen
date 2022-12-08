@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Graph from OSM network data."""
+"""Graph from OSM network data.
+Note:
+    - Majority of code is from `osmnx` package.
+    - Author only made minor modification to integrate `osmnx` features into `Graph` class.
+        - We do not use `geopandas` module.
+        - Some options that are not in use of our purpose are ignored.
+        - Type added.
+"""
 import itertools
 import warnings
 from collections import Counter
@@ -47,7 +54,7 @@ METADATA: dict[str, str] = {
 }
 EARTH_RADIUS_M: float = 6_371_009
 
-LL_TYPE = float | NDArray[np.float64]
+LL_TYPE = NDArray[np.float64]
 
 QUADRAT_WIDTH: float = 0.05
 MIN_NUM: int = 3
@@ -322,7 +329,7 @@ def _get_paths_to_simplify(G: MultiDiGraph) -> Generator:
     Parameters
 
     Args:
-        G (MultiDiGraph): input graph
+        MultiDiGraph: input graph
     """
     # first identify all the nodes that are endpoints
     endpoints = {n for n in G.nodes if _is_endpoint(G, n)}
@@ -343,22 +350,15 @@ def _build_path(
     """
     Build a path of nodes from one endpoint node to next endpoint node.
     Parameters
-    ----------
-    G : networkx.MultiDiGraph
-        input graph
-    endpoint : int
-        the endpoint node from which to start the path
-    endpoint_successor : int
-        the successor of endpoint through which the path to the next endpoint
-        will be built
-    endpoints : set
-        the set of all nodes in the graph that are endpoints
-    Returns
-    -------
-    path : list
-        the first and last items in the resulting path list are endpoint
-        nodes, and all other items are interstitial nodes that can be removed
-        subsequently
+
+    Args:
+        G (MultiDiGraph): input graph
+        endpoint (int): the endpoint node from which to start the path
+        endpoint_successor (int): the successor of endpoint through which the
+        endpoints (set): the set of all nodes in the graph that are endpoints
+
+    Returns:
+        list: the first and last items in the resulting path list are endpoint nodes, and all other items are interstitial nodes that can be removed subsequently
     """
     # start building path from endpoint node through its successor
     path = [endpoint, endpoint_successor]
@@ -420,7 +420,6 @@ def _is_endpoint(G: MultiDiGraph, node: int) -> bool:
     2) or, has no incoming edges or no outgoing edges, ie, all its incident
     edges point inward or all its incident edges point outward.
     3) or, it does not have exactly two neighbors and degree of 2 or 4.
-    4) or, if strict mode is false, if its edges have different OSM IDs.
     Parameters
 
     Args:
@@ -477,8 +476,7 @@ def _intersect_index_quadrats(
         polygon (Polygon): the polygon to intersect with the geometries
 
     Returns
-        geoms_in_poly : set
-            index labels of geometries that intersected polygon
+        set: index labels of geometries that intersected polygon
     """
     # create an r-tree spatial index for the geometries
     s_index = STRtree(geometries)
@@ -500,22 +498,16 @@ def _intersect_index_quadrats(
     return np.asarray(list(geoms_in_poly), dtype=np.int64)
 
 
-def _quadrat_cut_geometry(polygon: Polygon):
+def _quadrat_cut_geometry(polygon: Polygon) -> MultiPolygon:
     """
     Split a Polygon or MultiPolygon up into sub-polygons of a specified size.
     Parameters
-    ----------
-    geometry : shapely.geometry.Polygon or shapely.geometry.MultiPolygon
-        the geometry to split up into smaller sub-polygons
-    quadrat_width : numeric
-        the linear width of the quadrats with which to cut up the geometry (in
-        the units the geometry is in)
-    min_num : int
-        the minimum number of linear quadrat lines (e.g., min_num=3 would
-        produce a quadrat grid of 4 squares)
+
+    Args:
+        polygon (Polygon): the geometry to split up into smaller sub-polygons
+
     Returns
-    -------
-    geometry : shapely.geometry.MultiPolygon
+        MultiPolygon
     """
     # create n evenly spaced points between the min and max x and y bounds
     west, south, east, north = polygon.geometry.bounds  # type: ignore
@@ -570,7 +562,7 @@ def _graph_to_gdf_nodes(
 
 def _great_circle_vec(
     lat1: LL_TYPE, lng1: LL_TYPE, lat2: LL_TYPE, lng2: LL_TYPE
-):
+) -> NDArray[np.float64]:
     """
     Calculate great-circle distances between pairs of points.
     Vectorized function to calculate the great-circle distance between two
@@ -579,13 +571,13 @@ def _great_circle_vec(
     Parameters
 
     Args:
-        lat1 (float or numpy.array of float): first point's latitude coordinate
-        lng1 (float or numpy.array of float): first point's longitude coordinate
-        lat2 (float or numpy.array of float): second point's latitude coordinate
-        lng2 (float or numpy.array of float): second point's longitude coordinate
+        lat1 (NDArray[np.float64]): first point's latitude coordinate
+        lng1 (NDArray[np.float64]): first point's longitude coordinate
+        lat2 (NDArray[np.float64]): second point's latitude coordinate
+        lng2 (NDArray[np.float64]): second point's longitude coordinate
 
     Returns:
-        dist (float or numpy.array of float): distance from each (lat1, lng1) to each (lat2, lng2) in units of earth_radius
+        NDArray[np.float64]: distance from each (lat1, lng1) to each (lat2, lng2) in units of earth_radius
     """
     y1 = np.deg2rad(lat1)
     y2 = np.deg2rad(lat2)
@@ -597,7 +589,7 @@ def _great_circle_vec(
 
     h = np.sin(dy / 2) ** 2 + np.cos(y1) * np.cos(y2) * np.sin(dx / 2) ** 2
     h = np.minimum(1, h)  # protect against floating point errors
-    arc = 2 * np.arcsin(np.sqrt(h))
+    arc = 2.0 * np.arcsin(np.sqrt(h))
 
     # return distance in units of earth_radius
     return arc * EARTH_RADIUS_M
