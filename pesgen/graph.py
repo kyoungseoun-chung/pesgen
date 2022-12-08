@@ -109,9 +109,7 @@ class Graph:
         attrs_to_sum = {"length", "travel_time"}
 
         # make a copy to not mutate original graph object caller passed in
-        G = self.nx.copy()
-        initial_node_count = len(G)
-        initial_edge_count = len(G.edges)
+        G: MultiDiGraph = self.nx.copy()
         all_nodes_to_remove = []
         all_edges_to_add = []
 
@@ -197,6 +195,7 @@ class Graph:
 
         # mark graph as having been simplified
         G.graph["simplified"] = True
+        self.nx_graph = G
 
     def count_streets_per_node(self) -> None:
         """
@@ -346,7 +345,7 @@ def _get_paths_to_simplify(G: MultiDiGraph) -> Generator:
 
 def _build_path(
     G: MultiDiGraph, endpoint: int, endpoint_successor: int, endpoints: set
-) -> list:
+) -> list[int]:
     """
     Build a path of nodes from one endpoint node to next endpoint node.
     Parameters
@@ -386,7 +385,7 @@ def _build_path(
                         # we have come to the end of a self-looping edge, so
                         # add first node to end of path to close it and return
                         return path + [endpoint]
-                    else:  # pragma: no cover
+                    else:
                         # this can happen due to OSM digitization error where
                         # a one-way street turns into a two-way here, but
                         # duplicate incoming one-way edges are present
@@ -394,7 +393,7 @@ def _build_path(
                             f"Graph: Unexpected simplify pattern handled near {successor}"
                         )
                         return path
-                else:  # pragma: no cover
+                else:
                     # if successor has >1 successors, then successor must have
                     # been an endpoint because you can go in 2 new directions.
                     # this should never occur in practice
