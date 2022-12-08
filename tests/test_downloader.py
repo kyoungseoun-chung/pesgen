@@ -12,11 +12,11 @@ def test_get_data_from_nominatim():
 
     data = query_to_gd(location)
     polygon = data["geometry"]
-    # new_polygon = polygon.to_utm()
-    # buffered = new_polygon.buffered(500)
-    # new_new_polygon = new_polygon.to_latlng()
+    p_utm = polygon.copy().to_utm()
+    b_polygon = p_utm.copy().buffered(500)
+    b_polygon = b_polygon.copy().to_lnglat()
 
-    network = osm_network(polygon)
+    network = osm_network(b_polygon)
     graph = Graph(network)
     graph.truncate(polygon)
     graph.count_streets_per_node()

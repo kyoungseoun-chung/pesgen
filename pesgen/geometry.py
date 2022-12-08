@@ -2,6 +2,7 @@
 """Geometry module contains Polygon. Adopt `shapely` library and clean up unnecessary parts."""
 from __future__ import annotations
 
+from copy import deepcopy
 from math import floor
 from typing import TypedDict
 
@@ -32,15 +33,17 @@ class Polygon:
             geojson (dict): GeoJSON of the polygon. It includes types and coordinates.
         """
 
+        self.crs = CRS_WGS84
+
         self.geojson: GeoJSON = geojson
         # Somehow, shapely buffer returns BaseGeometry instead of Polygon. Therefore, additional type `BaseGeometry` is added.
         self._geo: ShapelyPolygon | BaseGeometry = ShapelyPolygon(
-            geojson["coordinates"][0]
+            self.geojson["coordinates"][0].copy()
         )
 
     def __repr__(self) -> str:
 
-        return f"{self.__class__.__name__}(bounds={self.geometry.bounds}, utm_src={self.utm_crs})"
+        return f"{self.__class__.__name__}(bounds={self.geometry.bounds}, area={self.geometry.area})"
 
     @property
     def geometry(self) -> ShapelyPolygon | BaseGeometry:
@@ -69,33 +72,63 @@ class Polygon:
         """Convert coordinates to OSM format. Partially copied from `osmnx` package."""
         s = ""
         separator = " "
-        for coord in self.geojson["coordinates"][0]:
+        for coord in self.geojson["coordinates"][0].copy():
             # round floating point lats and longs to 6 decimals (ie, ~100 mm)
             # so we can hash and cache strings consistently
             s = f"{s}{separator}{coord[1]:.6f}{separator}{coord[0]:.6f}"
         return s
 
+    @property
+    def swap_coord(self) -> list[list[float]]:
+        latlng = []
+        for coord in self.geojson["coordinates"][0].copy():
+            latlng.append([coord[1], coord[0]])
+        return latlng
+
+    # TODO: there is a projection coordinate order issue.
     def to_utm(self) -> Polygon:
-        """Convert latitude and longitude to UTM coordinates."""
-        project = pyproj.Transformer.from_crs(
-            CRS_WGS84, CRS_UTM, always_xy=True
-        ).transform
-        self.geo = transform(
-            project, ShapelyPolygon(self.geojson["coordinates"][0])
-        )
+        """Convert latitude and longitude to UTM coordinates.
 
-        return self
+        Note:
+            - `pyproj` uses lat-lng order for `CRS_UTM`. Therefore, we need to swap the coordinate. (On the other hand, openstreet map returns coordinates in lng-lat order.)
+        """
 
-    def to_latlng(self) -> Polygon:
+        if self.crs == CRS_UTM:
+            return self
+        else:
+            project = pyproj.Transformer.from_crs(
+                CRS_WGS84, CRS_UTM, always_xy=True
+            ).transform
+
+            geo = transform(project, ShapelyPolygon(self.swap_coord))
+            self.geojson["coordinates"][0] = [
+                [coord[1], coord[0]] for coord in geo.exterior.coords
+            ]
+            # Reconstruction of polygon using swapped coordinates.
+            self._geo = ShapelyPolygon(self.geojson["coordinates"][0].copy())
+            self.crs = CRS_UTM
+            return self
+
+    def to_lnglat(self) -> Polygon:
         """Convert UTM coordinates to latitude and longitude."""
-        project = pyproj.Transformer.from_crs(
-            CRS_UTM, CRS_WGS84, always_xy=True
-        ).transform
-        self._geo = transform(
-            project, ShapelyPolygon(self.geojson["coordinates"][0])
-        )
 
-        return self
+        if self.crs == CRS_WGS84:
+            return self
+        else:
+            project = pyproj.Transformer.from_crs(
+                CRS_UTM, CRS_WGS84, always_xy=True
+            ).transform
+            geo = transform(project, ShapelyPolygon(self.swap_coord))
+
+            # Bring back to long-lat order
+            self.geojson["coordinates"][0] = [
+                [coord[1], coord[0]] for coord in geo.exterior.coords
+            ]
+            self._geo = ShapelyPolygon(self.geojson["coordinates"][0].copy())
+
+            self.crs = CRS_WGS84
+
+            return self
 
     def buffered(self, buffer: float) -> Polygon:
         """Buffer the polygon by a given distance.
@@ -104,8 +137,12 @@ class Polygon:
             buffer (float): Distance to buffer the polygon by.
         """
 
-        self._geo = ShapelyPolygon(self.geojson["coordinates"][0]).buffer(
-            buffer
-        )
+        self._geo = self._geo.buffer(buffer)
+        self.geojson["coordinates"][0] = [
+            [coord[0], coord[1]] for coord in self._geo.exterior.coords  # type: ignore
+        ]
 
         return self
+
+    def copy(self) -> Polygon:
+        return deepcopy(self)
