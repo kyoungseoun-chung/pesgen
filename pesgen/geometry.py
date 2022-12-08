@@ -2,12 +2,10 @@
 """Geometry module contains Polygon. Adopt `shapely` library and clean up unnecessary parts."""
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
 from math import floor
+from typing import TypedDict
 
 import pyproj
-from shapely.geometry import mapping
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform
@@ -16,20 +14,48 @@ CRS_WGS84 = pyproj.CRS("EPSG:4326")
 CRS_UTM = pyproj.CRS("EPSG:32618")
 
 
-@dataclass
-class Polygon(ShapelyPolygon):
-    """Custom polygon geometry class inherits from `shapely.geometry.Polygon`."""
+class GeoJSON(TypedDict):
 
-    geojson: dict[str, str | list[list[list[float]]]]
-    """GeoJSON of the polygon. It includes types and coordinates."""
+    type: str
+    """Geometry type. Should be polygon."""
+    coordinates: list[list[list[float]]]
+    """Coordinates extracted from open street map."""
 
-    def __post_init__(self):
-        super().__init__(self.geojson["coordinates"][0])
+
+class Polygon:
+    """polygon geometry class to manipulate `shapely.geometry.Polygon`."""
+
+    def __init__(self, geojson: GeoJSON):
+        """Initialize Polygon class.
+
+        Args:
+            geojson (dict): GeoJSON of the polygon. It includes types and coordinates.
+        """
+
+        self.geojson: GeoJSON = geojson
+        # Somehow, shapely buffer returns BaseGeometry instead of Polygon. Therefore, additional type `BaseGeometry` is added.
+        self._geo: ShapelyPolygon | BaseGeometry = ShapelyPolygon(
+            geojson["coordinates"][0]
+        )
+
+    def __repr__(self) -> str:
+
+        return f"{self.__class__.__name__}(bounds={self.geometry.bounds}, utm_src={self.utm_crs})"
+
+    @property
+    def geometry(self) -> ShapelyPolygon | BaseGeometry:
+        """Return `shapely.geometry.Polygon`"""
+        return self._geo
+
+    @geometry.setter
+    def geometry(self, other: ShapelyPolygon | BaseGeometry) -> None:
+        """Set geometry from other."""
+        self._geo = other
 
     @property
     def utm_zone(self) -> int:
         """Calculate UTM zone from avg longitude to define CRS to project to"""
-        avg_lng = self.representative_point().x  # type: ignore
+        avg_lng = self.geometry.representative_point().x  # type: ignore
 
         return int(floor((avg_lng + 180) / 6) + 1)
 
@@ -54,47 +80,32 @@ class Polygon(ShapelyPolygon):
         project = pyproj.Transformer.from_crs(
             CRS_WGS84, CRS_UTM, always_xy=True
         ).transform
-        shapely_object = transform(
+        self.geo = transform(
             project, ShapelyPolygon(self.geojson["coordinates"][0])
         )
 
-        return Polygon(_convert_to_geojson(shapely_object))
+        return self
 
     def to_latlng(self) -> Polygon:
         """Convert UTM coordinates to latitude and longitude."""
         project = pyproj.Transformer.from_crs(
             CRS_UTM, CRS_WGS84, always_xy=True
         ).transform
-        shapely_object = transform(
+        self._geo = transform(
             project, ShapelyPolygon(self.geojson["coordinates"][0])
         )
-        return Polygon(_convert_to_geojson(shapely_object))
+
+        return self
 
     def buffered(self, buffer: float) -> Polygon:
         """Buffer the polygon by a given distance.
 
         Args:
             buffer (float): Distance to buffer the polygon by.
-
-        Returns:
-            Polygon: Buffered polygon.
         """
 
-        shapely_object = ShapelyPolygon(self.geojson["coordinates"][0]).buffer(
+        self._geo = ShapelyPolygon(self.geojson["coordinates"][0]).buffer(
             buffer
         )
 
-        return Polygon(_convert_to_geojson(shapely_object))
-
-
-def _convert_to_geojson(obj: ShapelyPolygon | BaseGeometry):
-    """Convert shapely object to GeoJSON.
-
-    Args:
-        obj (ShapelyPolygon): Shapely object to convert to GeoJSON.
-
-    Returns:
-        dict[str, str | list[list[list[float]]]]: GeoJSON of the polygon.
-    """
-
-    return json.loads(json.dumps(mapping(obj)))
+        return self

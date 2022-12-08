@@ -3,6 +3,7 @@
 import json
 import time
 from collections import OrderedDict
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
@@ -119,6 +120,7 @@ def osm_network(polygon: Polygon) -> dict:
 
 
 def _data_from_url(url: str, query: str | Polygon) -> dict:
+    """Retrive data from url."""
 
     sc = 400
 
@@ -126,10 +128,9 @@ def _data_from_url(url: str, query: str | Polygon) -> dict:
 
     while sc != 200:
 
-        response = urlopen(url)
-        sc = response.status
-
-        if sc == 200:
+        try:
+            response = urlopen(url)
+            sc = response.status
             # Proper response from server
             data = response.read()
             response_json = json.loads(data.decode("utf-8"))
@@ -142,18 +143,20 @@ def _data_from_url(url: str, query: str | Polygon) -> dict:
                 retrieved_data = response_json
             else:
                 raise RuntimeError(f"OSM: no matching data for {query}!")
-        elif sc in [429, 504]:
-            # 429 is 'too many requests' and 504 is 'gateway timeout' from
-            # server overload: handle these by pausing then recursively
-            # re-trying until we get a valid response from the server
-            f"OSM: {NOMINATIM_ENDPOINT} returned {sc}: retry in 30 secs"
-            time.sleep(30)
-            continue
-        else:
-            # else, this was an unhandled status code, throw an exception
-            raise RuntimeError(
-                f"OSM: {NOMINATIM_ENDPOINT} returned {sc}: {response.reason}!"
-            )
+        except HTTPError as e:
+
+            if e.code in [429, 504]:
+                # 429 is 'too many requests' and 504 is 'gateway timeout' from
+                # server overload: handle these by pausing then recursively
+                # re-trying until we get a valid response from the server
+                f"OSM: {NOMINATIM_ENDPOINT} returned {sc}: retry in 30 secs"
+                time.sleep(30)
+                continue
+            else:
+                # else, this was an unhandled status code, throw an exception
+                raise RuntimeError(
+                    f"OSM: {NOMINATIM_ENDPOINT} returned {e.code}: {e.reason}!"
+                )
 
     return retrieved_data
 

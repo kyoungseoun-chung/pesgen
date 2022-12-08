@@ -2,6 +2,7 @@
 """Test downloader.py"""
 from pesgen.downloader import osm_network
 from pesgen.downloader import query_to_gd
+from pesgen.graph import Graph
 
 
 def test_get_data_from_nominatim():
@@ -9,9 +10,12 @@ def test_get_data_from_nominatim():
 
     data = query_to_gd(location)
     polygon = data["geometry"]
-    new_polygon = polygon.to_utm()
-    buffered = new_polygon.buffered(500)
-    new_new_polygon = new_polygon.to_latlng()
+    # new_polygon = polygon.to_utm()
+    # buffered = new_polygon.buffered(500)
+    # new_new_polygon = new_polygon.to_latlng()
 
     network = osm_network(polygon)
+    graph = Graph(network)
+    graph.truncate(polygon)
+
     pass
