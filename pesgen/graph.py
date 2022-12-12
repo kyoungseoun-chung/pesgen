@@ -13,11 +13,13 @@ from collections import Counter
 from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import date
+from functools import cached_property
 
 import networkx
 import numpy as np
 from networkx import MultiDiGraph
 from numpy.typing import NDArray
+from shapely.geometry import box
 from shapely.geometry import LineString
 from shapely.geometry import MultiPolygon
 from shapely.geometry import Point
@@ -71,12 +73,17 @@ class Graph:
         assert "elements" in self.osm_network, "Graph: empty network data!"
 
         nodes, paths = self.parse_node_path()
+
+        node_test = np.asarray(
+            [[nodes[d]["x"], nodes[d]["y"]] for d in nodes], dtype=np.float64
+        )
+
         # add each osm node to the graph
         for node, data in nodes.items():
             self.nx.add_node(node, **data)
 
         # add each osm way (ie, a path of edges) to the graph
-        _add_paths(self.nx, list(paths.values()))
+        self.add_paths(list(paths.values()))
 
         # retain only the largest connected component if retain_all is False
         self.get_largest_component()
@@ -84,6 +91,57 @@ class Graph:
         # add length (great-circle distance between nodes) attribute to each edge
         if len(self.nx.edges) > 0:
             self.add_edge_lengths()
+
+    @cached_property
+    def coord(self) -> NDArray[np.float64]:
+        """Return coordinates of nodes."""
+        return np.asarray(
+            [[n[1]["x"], n[1]["y"]] for n in self.nx.nodes(data=True)],  # type: ignore
+            dtype=np.float64,
+        )
+
+    def add_paths(self, paths: list) -> None:
+        """
+        Add a list of paths to the graph as edges.
+        Parameters
+
+        Args:
+            G (MultiDiGraph): graph to add paths to
+            paths (list): list of paths' tag:value attribute data dicts
+        """
+        # the values OSM uses in its 'oneway' tag to denote True, and to denote
+        # travel can only occur in the opposite direction of the node order. see:
+        # https://wiki.openstreetmap.org/wiki/Key:oneway
+        # https://www.geofabrik.de/de/data/geofabrik-osm-gis-standard-0.7.pdf
+        oneway_values = {"yes", "true", "1", "-1", "reverse", "T", "F"}
+        reversed_values = {"-1", "reverse", "T"}
+
+        for path in paths:
+
+            # extract/remove the ordered list of nodes from this path element so
+            # we don't add it as a superfluous attribute to the edge later
+            nodes = path.pop("nodes")
+
+            # reverse the order of nodes in the path if this path is both one-way
+            # and only allows travel in the opposite direction of nodes' order
+            is_one_way = _is_path_one_way(path, oneway_values)
+            if is_one_way and _is_path_reversed(path, reversed_values):
+                nodes.reverse()
+
+            path["oneway"] = is_one_way
+
+            # zip path nodes to get (u, v) tuples like [(0,1), (1,2), (2,3)].
+            edges = list(zip(nodes[:-1], nodes[1:]))
+
+            # add all the edge tuples and give them the path's tag:value attrs
+            path["reversed"] = False
+            self.nx.add_edges_from(edges, **path)
+
+            # if the path is NOT one-way, reverse direction of each edge and add
+            # this path going the opposite direction too
+            if not is_one_way:
+                path["reversed"] = True
+                self.nx.add_edges_from([(v, u) for u, v in edges], **path)
 
     def simplify_graph(self):
         """
@@ -243,6 +301,7 @@ class Graph:
 
         # first identify all nodes whose point geometries lie within the polygon
         osm_id, gs_nodes = _graph_to_gdf_nodes(self.nx)
+        # Find all points inside the polygon
         to_keep = _intersect_index_quadrats(gs_nodes, osm_id, polygon)
 
         if to_keep.shape[0] == 0:
@@ -251,10 +310,10 @@ class Graph:
                 "Graph: Found no graph nodes within the requested polygon"
             )
 
-        # now identify all nodes whose point geometries lie outside the polygon
+        # Now identify all nodes whose point geometries lie outside the polygon
         nodes_outside = np.setdiff1d(osm_id, to_keep)
 
-        # now remove from the graph all those nodes that lie outside the polygon
+        # Remove from the graph all those nodes that lie outside the polygon
         # make a copy to not mutate original graph object caller passed in
         self.nx_graph = self.nx.copy()
         self.nx_graph.remove_nodes_from(nodes_outside)
@@ -317,6 +376,7 @@ class Graph:
 
     @property
     def nx(self) -> MultiDiGraph:
+        """Return `networkx` Graph object."""
         return self.nx_graph
 
 
@@ -479,7 +539,7 @@ def _intersect_index_quadrats(
     """
     # create an r-tree spatial index for the geometries
     s_index = STRtree(geometries)
-    # To get the original indexes of the query results, create an auxiliary dictionary. But use the geometry ids as keys since the shapely geometries themselves are not hashable.
+    # Shapely geometries are not hashable.
     index_by_id = {id(pt): i for i, pt in enumerate(geometries)}
 
     # cut the polygon into chunks for spatial index intersecting
@@ -489,10 +549,22 @@ def _intersect_index_quadrats(
     # loop through each chunk of the polygon to find intersecting geometries
     for poly in multipoly.geoms:
 
+        poly = poly.buffer(0.0)
         if poly.is_valid and poly.area > 0:
-            possible_matches_iloc = s_index.query(poly)
-            index_set = [index_by_id[id(pt)] for pt in possible_matches_iloc]
-            geoms_in_poly.update(osm_id[index_set].tolist())
+
+            # Approximated matches
+            b_box = box(*poly.bounds)
+            pts_in_box = s_index.query(b_box)
+            osm_id_in_box = osm_id[pts_in_box]
+            # Update tree with approximated match
+            s_index_appx = STRtree(
+                s_index.geometries.take(pts_in_box).tolist()
+            )
+
+            # Precise query
+            geoms_in_poly.update(
+                osm_id_in_box[s_index_appx.query(poly, predicate="intersects")]
+            )
 
     return np.asarray(list(geoms_in_poly), dtype=np.int64)
 
@@ -626,50 +698,6 @@ def _convert_path(element: dict) -> dict:
             if useful_tag in element["tags"]:
                 path[useful_tag] = element["tags"][useful_tag]
     return path
-
-
-def _add_paths(G: MultiDiGraph, paths: list) -> None:
-    """
-    Add a list of paths to the graph as edges.
-    Parameters
-
-    Args:
-        G (MultiDiGraph): graph to add paths to
-        paths (list): list of paths' tag:value attribute data dicts
-    """
-    # the values OSM uses in its 'oneway' tag to denote True, and to denote
-    # travel can only occur in the opposite direction of the node order. see:
-    # https://wiki.openstreetmap.org/wiki/Key:oneway
-    # https://www.geofabrik.de/de/data/geofabrik-osm-gis-standard-0.7.pdf
-    oneway_values = {"yes", "true", "1", "-1", "reverse", "T", "F"}
-    reversed_values = {"-1", "reverse", "T"}
-
-    for path in paths:
-
-        # extract/remove the ordered list of nodes from this path element so
-        # we don't add it as a superfluous attribute to the edge later
-        nodes = path.pop("nodes")
-
-        # reverse the order of nodes in the path if this path is both one-way
-        # and only allows travel in the opposite direction of nodes' order
-        is_one_way = _is_path_one_way(path, oneway_values)
-        if is_one_way and _is_path_reversed(path, reversed_values):
-            nodes.reverse()
-
-        path["oneway"] = is_one_way
-
-        # zip path nodes to get (u, v) tuples like [(0,1), (1,2), (2,3)].
-        edges = list(zip(nodes[:-1], nodes[1:]))
-
-        # add all the edge tuples and give them the path's tag:value attrs
-        path["reversed"] = False
-        G.add_edges_from(edges, **path)
-
-        # if the path is NOT one-way, reverse direction of each edge and add
-        # this path going the opposite direction too
-        if not is_one_way:
-            path["reversed"] = True
-            G.add_edges_from([(v, u) for u, v in edges], **path)
 
 
 def _is_path_one_way(path: dict, oneway_values: set) -> bool:

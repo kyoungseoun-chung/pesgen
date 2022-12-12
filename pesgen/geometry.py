@@ -8,7 +8,6 @@ from typing import TypedDict
 
 import pyproj
 from shapely.geometry import Polygon as ShapelyPolygon
-from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform
 
 CRS_WGS84 = pyproj.CRS("EPSG:4326")
@@ -34,10 +33,9 @@ class Polygon:
         """
 
         self.crs = CRS_WGS84
-
         self.geojson: GeoJSON = geojson
-        # Somehow, shapely buffer returns BaseGeometry instead of Polygon. Therefore, additional type `BaseGeometry` is added.
-        self._geo: ShapelyPolygon | BaseGeometry = ShapelyPolygon(
+        # Initial geometry
+        self._geo: ShapelyPolygon = ShapelyPolygon(
             self.geojson["coordinates"][0].copy()
         )
 
@@ -46,14 +44,23 @@ class Polygon:
         return f"{self.__class__.__name__}(bounds={self.geometry.bounds}, area={self.geometry.area})"
 
     @property
-    def geometry(self) -> ShapelyPolygon | BaseGeometry:
+    def geometry(self) -> ShapelyPolygon:
         """Return `shapely.geometry.Polygon`"""
         return self._geo
 
     @geometry.setter
-    def geometry(self, other: ShapelyPolygon | BaseGeometry) -> None:
+    def geometry(self, other: ShapelyPolygon) -> None:
         """Set geometry from other."""
         self._geo = other
+
+    @property
+    def coord(self):
+        if self._geo.exterior is not None:
+            return self._geo.exterior.xy
+        else:
+            raise ValueError(
+                "Graph: There is no exterior coordinate information!"
+            )
 
     @property
     def utm_zone(self) -> int:
@@ -85,7 +92,6 @@ class Polygon:
             latlng.append([coord[1], coord[0]])
         return latlng
 
-    # TODO: there is a projection coordinate order issue.
     def to_utm(self) -> Polygon:
         """Convert latitude and longitude to UTM coordinates.
 
@@ -137,7 +143,8 @@ class Polygon:
             buffer (float): Distance to buffer the polygon by.
         """
 
-        self._geo = self._geo.buffer(buffer)
+        # Somehow, buffer function returns BaseGeometry. Therefore ignore type.
+        self._geo = self._geo.buffer(buffer)  # type: ignore
         self.geojson["coordinates"][0] = [
             [coord[0], coord[1]] for coord in self._geo.exterior.coords  # type: ignore
         ]
